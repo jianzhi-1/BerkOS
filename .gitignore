@@ -1,0 +1,31 @@
+# media
+/media
+
+# dependencies
+/realtime-backend/node_modules
+/realtime-backend/.pnp
+.pnp.js
+
+# testing
+/realtime-backend/coverage
+
+# pycache
+**/__pycache__/
+
+# packaging
+*.zip
+*.tar.gz
+*.tar
+*.tgz
+*.bla
+
+# log
+*.log
+
+# misc
+.DS_Store
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
