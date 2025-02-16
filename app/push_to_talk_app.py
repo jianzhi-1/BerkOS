@@ -280,7 +280,6 @@ class RealtimeApp(App[None]):
                 await self.ret()
             elif "SCREENSHOT" in inst:
                 self.screenshot()
-                time.sleep(3)
             elif "NO-OP" in inst:
                 pass
             else:
@@ -498,12 +497,20 @@ class RealtimeApp(App[None]):
         response = await self.client.audio.speech.create(
             model="tts-1",
             voice="sage",
-            input=self.a0
+            input=self.a0,
+            response_format="pcm"
         )
 
-        audio_data = io.BytesIO(response.read())
-        audio = AudioSegment.from_file(audio_data, format="mp3")
-        play(audio)
+        self.audio_player.reset_frame_count()
+        self.last_audio_item_id = None
+
+        bytes_data = response.content
+        logger.warn(f"bytes_data={bytes_data}")
+        self.audio_player.add_data(bytes_data)
+
+        # audio_data = io.BytesIO(response.read())
+        # audio = AudioSegment.from_file(audio_data, format="mp3")
+        # play(audio)
 
         # bytes_data = base64.b64decode(response.read())
         # if len(bytes_data) % 2 != 0:
