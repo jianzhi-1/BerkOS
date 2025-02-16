@@ -146,7 +146,6 @@ class LLMAOS():
         
         return instructions
 
-
     ### CODE GEN PORTION
 
     async def nvidia_neva(self, transcript) -> str:

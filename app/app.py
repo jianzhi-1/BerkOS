@@ -60,7 +60,6 @@ class SessionDisplay(Static):
     def render(self) -> str:
         return f"Session ID: {self.session_id}" if self.session_id else "Connecting..."
 
-
 class AudioStatusIndicator(Static):
     """A widget that shows the current audio recording status."""
 
@@ -322,11 +321,6 @@ class RealtimeApp(App[None]):
                 self.should_send_audio.set()
                 status_indicator.is_recording = True
     
-
-
-
-
-
 if __name__ == "__main__":
     app = RealtimeApp()
     app.run()
