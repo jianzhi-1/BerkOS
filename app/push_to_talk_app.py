@@ -16,7 +16,8 @@
 #     "pydub",
 #     "sounddevice",
 #     "openai[realtime]",
-#     "pyautogui"
+#     "pyautogui",
+#     "requests"
 # ]
 #
 # [tool.uv.sources]
@@ -25,6 +26,7 @@
 from __future__ import annotations
 
 import base64
+import requests
 import asyncio
 from typing import Any, cast, Tuple, Union, List
 from typing_extensions import override
@@ -34,6 +36,7 @@ import pyautogui
 import subprocess
 import queue
 import io
+import os
 
 from pydub import AudioSegment
 from pydub.playback import play
@@ -250,7 +253,7 @@ class RealtimeApp(App[None]):
 
     async def execute(self, instructions: list[str], transcript: str) -> None:
         for inst in instructions:
-            time.sleep(1.0)
+            time.sleep(1.5)
             if "KEYBOARD" in inst:
                 if inst[9:] in self.KEYWORDS: # key
                     if inst[9:] == "<enter>":
@@ -275,7 +278,7 @@ class RealtimeApp(App[None]):
                 pyautogui.press('enter')
                 time.sleep(1.0)
             elif "ANALYSIS" in inst:
-                await self.analysis(transcript)
+                await self.analysis_powerful(transcript)
             elif "RET" in inst:
                 await self.ret(transcript)
             elif "SCREENSHOT" in inst:
@@ -459,9 +462,83 @@ class RealtimeApp(App[None]):
                 status_indicator.is_recording = True
 
     def encode_image(self, image_path):
-        import base64
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
+
+    async def nvidia_neva(self, transcript) -> str:
+        invoke_url = "https://ai.api.nvidia.com/v1/vlm/nvidia/neva-22b"
+        stream = False
+
+        from PIL import Image
+        filename = self.screenshot_name_history[-1]
+        image = Image.open(f"{filename}.png")
+        new_size = (image.width // 5, image.height // 5)
+        resized_image = image.resize(new_size, Image.LANCZOS)
+        resized_image.save(f"{filename}_rescaled.png")
+
+        with open(f"{filename}_rescaled.png", "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+        
+        assert len(image_b64) < 180_000, \
+            f"The image size is {len(image_b64)}. To upload larger images, use the assets API (see docs)"
+
+        headers = {
+            "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
+            "Accept": "text/event-stream" if stream else "application/json"
+        }
+
+        payload = {
+            "messages": [
+                {
+                "role": "user",
+                "content": f'Given the following image, answer "{transcript}". <img src="data:image/jpg;base64,{image_b64}" />'
+                }
+            ],
+            "max_tokens": 1024,
+            "temperature": 0.20,
+            "top_p": 0.70,
+            "seed": 0,
+            "stream": stream
+        }
+
+        response = requests.post(invoke_url, headers=headers, json=payload)
+        answer = response.json()["choices"][0]["message"]["content"]
+        logger.warning(f"answer from nvidia = {answer}")
+        return answer
+
+    async def analysis_powerful(self, transcript: str) -> None:
+        image_path = f"{self.screenshot_name_history[-1]}.png"
+        base64_image = self.encode_image(image_path)
+
+        resp1, resp2 = await asyncio.gather(
+            self.client.chat.completions.create(
+                model=self.GPT_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": transcript + " Use the image below for guidance.", # "What is the score between Man City and Real Madrid?",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                            },
+                        ],
+                    }
+                ],
+            ),
+            self.nvidia_neva(transcript)
+        )
+
+        resp1 = resp1.choices[0].message.content
+
+        self.a0 = resp1 + resp2 # simple concatenation
+        logger.warning(f"final answer = {self.a0}")
+        # TODO add in Pixstral as another layer of analysis
+        logging.getLogger(__name__).warning(f"analysis returns = {self.a0}")
+        return
 
     async def analysis(self, transcript: str) -> None:
         image_path = f"{self.screenshot_name_history[-1]}.png"
