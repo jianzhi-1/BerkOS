@@ -27,6 +27,9 @@ import base64
 import asyncio
 from typing import Any, cast
 from typing_extensions import override
+import logging
+import time
+import pyautogui
 
 from textual import events
 from audio_util import CHANNELS, SAMPLE_RATE, AudioPlayerAsync
@@ -39,6 +42,8 @@ from openai import AsyncOpenAI
 from openai.types.beta.realtime.session import Session
 from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename='berk.log', encoding='utf-8', level=logging.DEBUG)
 
 class SessionDisplay(Static):
     """A widget that shows the current session ID."""
@@ -151,17 +156,98 @@ class RealtimeApp(App[None]):
         self.run_worker(self.handle_realtime_connection())
         self.run_worker(self.send_mic_audio())
 
+    async def assemble_and_run(self, transcript):
+        instructions = await self.codegen(transcript)
+        self.execute(instructions)
+
+    async def codegen(self, transcript) -> list[str]:
+        """
+        Acts as an intermediate language.
+        """
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "developer", "content": """
+                    You are a compiler. Given the user's task, your response should be a sequence of the following instructions:
+                    1. An executable UNIX command that is not dangerous. For example, rm -rf is dangerous.
+                    2. SCREEN_SHOT
+                    3. LEFT_CLICK ON <something> (something can be a cross symbol, a tab)
+                    4. LEFT_DOUBLE_CLICK ON <something> (something can be a cross symbol, a tab)
+                    5. RIGHT_CLICK
+                    6. OPEN_TERMINAL
+                """},
+                {"role": "developer", "content": """
+                    For example, if the user asks for the score of football team X versus football team Y, you should output:
+                    "open https://www.google.com/",
+                    "LEFT_CLICK 598 142",
+                    "KEYBOARD 'x vs y'",
+                    "KEYBOARD <enter>",
+                    "SCREEN_SHOT",
+                    "ANALYSIS",
+                    "RET"
+                """},
+                {"role": "developer", "content": """
+                    Do not insert numbering or ordered list. Just separate each command by enter.
+                """},
+                {"role": "user", "content": transcript}
+            ]
+        )
+        logger.warning(f"!!! codegen_response = {response}")
+        resp = response.choices[0].message.content
+
+        # post processing
+        resp = resp.split("\n")
+        instructions = [s for s in resp if len(s) > 0] # filter out empty strings
+        logger.warning(f"!!! processed response = {instructions}")
+        
+        return instructions
+
+    def execute(self, instructions:list[str]) -> None:
+        for inst in instructions:
+            time.sleep(1.0)
+            if "KEYBOARD" in inst:
+                if inst[9:] in self.KEYWORDS: # key
+                    if inst[9:] == "<enter>":
+                        pyautogui.press('enter')
+                else:
+                    self.keyboard_write(inst[9:].strip("'"))
+            elif "LEFT_CLICK" in inst:
+                ls = inst.split(" ")
+                x, y = int(ls[1]), int(ls[2])
+                self.left_click(x, y)
+            elif "WAIT" in inst:
+                ls = inst.split(" ")
+                t = float(ls[1])
+                time.sleep(t)
+            elif "OPEN_TERMINAL" in inst:
+                pyautogui.keyDown('command')
+                pyautogui.press('space')
+                pyautogui.keyUp('command')
+                time.sleep(1.0)
+                self.keyboard_write("terminal")
+                time.sleep(1.0)
+                pyautogui.press('enter')
+                time.sleep(1.0)
+            else:
+                self.shell(inst)
+
     async def handle_realtime_connection(self) -> None:
-        async with self.client.beta.realtime.connect(model="gpt-4o-realtime-preview") as conn:
+        async with self.client.beta.realtime.connect(
+            model="gpt-4o-realtime-preview",
+        ) as conn:
             self.connection = conn
             self.connected.set()
 
             # note: this is the default and can be omitted
             # if you want to manually handle VAD yourself, then set `'turn_detection': None`
             await conn.session.update(session={
-                "turn_detection": {"type": "server_vad", "threshold": 0.8, "silence_duration_ms": 1000}, 
-                "instructions": "You are an operating system named Berk. The user's name is Jay.",
-                "voice": "sage"
+                "turn_detection": {"type": "server_vad", "threshold": 0.8, "silence_duration_ms": 1000},
+                "instructions": "You are an operating system named Berk, helping a user named Jay. Be very less verbose. Do not list stuff. If Jay asks you to perform operations relating to software, answer positively that you are initiating the commands.",
+                "input_audio_transcription": {
+                    "model":"whisper-1",
+                    "language":"en"
+                },
+                "voice":"sage"
             })
 
             acc_items: dict[str, Any] = {}
@@ -187,8 +273,15 @@ class RealtimeApp(App[None]):
                     self.audio_player.add_data(bytes_data)
                     continue
 
-                if event.type == "conversation.item.created":
-                    
+                # THIS APPROACH FAILED
+                # if event.type == "conversation.item.created":
+                #     logger.debug(f"conversation.item.created WUT {event.item}")
+                #     logger.debug(f"conversation.item.created HUT {event.item.content}")
+                #     continues
+
+                if event.type == "conversation.item.input_audio_transcription.completed":
+                    logger.warning(f"!!! User transcript: {event.transcript}")
+                    await self.assemble_and_run(event.transcript)
                     continue
 
                 if event.type == "response.audio_transcript.delta":
@@ -209,7 +302,7 @@ class RealtimeApp(App[None]):
         await self.connected.wait()
         assert self.connection is not None
         return self.connection
-
+    
     async def send_mic_audio(self) -> None:
         import sounddevice as sd  # type: ignore
 
