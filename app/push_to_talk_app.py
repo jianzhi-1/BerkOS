@@ -277,7 +277,7 @@ class RealtimeApp(App[None]):
             elif "ANALYSIS" in inst:
                 await self.analysis(transcript)
             elif "RET" in inst:
-                await self.ret()
+                await self.ret(transcript)
             elif "SCREENSHOT" in inst:
                 self.screenshot()
             elif "NO-OP" in inst:
@@ -489,35 +489,24 @@ class RealtimeApp(App[None]):
         logging.getLogger(__name__).warning(f"analysis returns = {self.a0}")
         return
 
-    async def ret(self) -> None:
+    async def ret(self, transcript: str) -> None:
         # TODO can also use whisper or tacotron or nvidia
         logging.getLogger(__name__).warning(f"in ret = {self.a0}")
 
-        # TODO TTS - use audioPlayer somehow
-        response = await self.client.audio.speech.create(
-            model="tts-1",
-            voice="sage",
-            input=self.a0,
-            response_format="pcm"
-        )
-
-        self.audio_player.reset_frame_count()
-        self.last_audio_item_id = None
-
-        bytes_data = response.content
-        logger.warn(f"bytes_data={bytes_data}")
-        self.audio_player.add_data(bytes_data)
-
-        # audio_data = io.BytesIO(response.read())
-        # audio = AudioSegment.from_file(audio_data, format="mp3")
-        # play(audio)
-
-        # bytes_data = base64.b64decode(response.read())
-        # if len(bytes_data) % 2 != 0:
-        #     bytes_data = bytes_data[:-1]
-
-        # self.audio_player.reset_frame_count()
-        # self.audio_player.add_data(bytes_data)
+        connection = await self._get_connection()
+        asyncio.create_task(connection.send({
+            "type": "response.create",
+            "response": {
+                "modalities": ["text", "audio"],
+                "instructions": f"""
+                    You are an operating system named Berk, helping a user named Jay. Be very less verbose. Do not list stuff. Jay previously asked for "{transcript}". The search result is "{self.a0}". Please summarise for the result for Jay.
+                """,
+                "voice": "sage",
+                "output_audio_format": "pcm16",
+            }
+        }))
+        await asyncio.sleep(0)
+        return
 
     def left_click(self, x=None, y=None) -> None:
         if not (x is None and y is None):
