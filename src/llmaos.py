@@ -24,7 +24,8 @@ class LLMAOS():
         pass
 
     async def execute(self, instructions: list[str], transcript: str) -> None:
-        for inst in instructions:
+        for _inst in instructions:
+            inst = _inst.strip("'").strip('"').strip()
             time.sleep(1.5)
             if "KEYBOARD" in inst:
                 if inst[9:] in self.KEYWORDS: # key
@@ -50,9 +51,8 @@ class LLMAOS():
                 pyautogui.press('enter')
                 time.sleep(1.0)
             elif "ANALYSIS" in inst:
-                await self.analysis_powerful(transcript)
-            elif "SCREENSHOT" in inst:
                 self.screenshot()
+                await self.analysis_powerful(transcript)   
             elif "NO-OP" in inst:
                 pass
             else:
@@ -60,6 +60,7 @@ class LLMAOS():
 
     def shell(self, command: Union[str, list[str]]) -> None:
         if isinstance(command, str):
+            command = command.strip("'").strip('"').strip()
             command = command.split(" ")
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         print(result.stdout)
@@ -91,13 +92,12 @@ class LLMAOS():
                     "content": """
                         You are a compiler. Given the user's task, your response should be a sequence of the following instructions. If the user is not giving a task, then only output NO-OP. Do not insert numbering or ordered list. Just separate each command by enter.:
                         1. An executable UNIX command that is not dangerous. For example, rm -rf is dangerous.
-                        2. SCREENSHOT
-                        3. LEFT_CLICK x y (x, y are integers)
-                        4. LEFT_DOUBLE_CLICK x y (x, y are integers)
-                        5. RIGHT_CLICK
-                        6. OPEN_TERMINAL
-                        7. ANALYSIS
-                        8. NO-OP
+                        2. LEFT_CLICK x y (x from 0=left to 1792=right, y from 0=up to 1120=down are integers): left clicks on (x, y) on the 1792 x 1120 screen.
+                        3. OPEN_TERMINAL: opens up a terminal
+                        4. ANALYSIS: takes a screenshot and send it to API endpoints for analysis
+                        5. NO-OP: does nothing, used when Jay says something non-task related
+                        6. KEYBOARD x (x is some string in single quotes or a special keyword like <enter>): inputs x on the keyboard
+                        7. WAIT x (x is integer): waits x seconds, for a website to load for example
                     """
                 }, {
                     "role": "developer", 
@@ -107,7 +107,6 @@ class LLMAOS():
                         "LEFT_CLICK 605 561"
                         "KEYBOARD 'X vs Y'"
                         "KEYBOARD <enter>"
-                        "SCREENSHOT"
                         "ANALYSIS"
                     """
                 }, {
@@ -119,14 +118,33 @@ class LLMAOS():
                         "KEYBOARD 'X'"
                         "KEYBOARD <enter>"
                         "LEFT_CLICK 638 645"
-                        "WAIT 5.5"
+                        "WAIT 6"
                         "LEFT_CLICK 1245 797"
-                        "LEFT_CLICK 1292 895"
+                        "LEFT_CLICK 1293 814"
                     """
                 }, {
                     "role": "developer",
                     "content": """
-                        For example, if the user just says hello, you should just output:
+                        For example, if the user says press enter, output the following:
+                        "KEYBOARD <enter>"
+                    """
+                }, {
+                    "role": "developer",
+                    "content": """
+                        For example, if the user says type x:
+                        "KEYBOARD 'x'"
+                    """
+                }, {
+                    "role": "developer",
+                    "content": """
+                        For example, if the user says click on X, output the following, with integers x, y being your best guess of where to click:
+                        "ANALYSIS",
+                        "LEFT_CLICK x y"
+                    """
+                }, {
+                    "role": "developer",
+                    "content": """
+                        For example, if the user only says hello, you should just output:
                         "NO-OP"
                     """
                 }, {
