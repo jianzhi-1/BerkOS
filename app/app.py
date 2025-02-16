@@ -17,7 +17,8 @@
 #     "sounddevice",
 #     "openai[realtime]",
 #     "pyautogui",
-#     "requests"
+#     "requests",
+#     "mistralai"
 # ]
 #
 # [tool.uv.sources]
@@ -150,7 +151,7 @@ class RealtimeApp(App[None]):
         self.connected = asyncio.Event()
         self.REALTIME_MODEL = "gpt-4o-realtime-preview"
         self.processor_queue = queue.Queue()
-        self.llmaos = LLMAOS(self.client, self)
+        self.llmaos = LLMAOS(self.client, self, neva_flag=True, pixtral_flag=True)
 
     @override
     def compose(self) -> ComposeResult:
@@ -176,7 +177,11 @@ class RealtimeApp(App[None]):
             # if you want to manually handle VAD yourself, then set `'turn_detection': None`
             await conn.session.update(session={
                 "turn_detection": {"type": "server_vad", "threshold": 0.8, "silence_duration_ms": 1000},
-                "instructions": "You are an operating system named Berk, helping a user named Jay. Be very less verbose. Do not list stuff. If Jay asks you to perform operations relating to software or web search (such as sports), answer positively that you are initiating the commands.",
+                "instructions": """
+                    You are an operating system named Berk, helping a user named Jay. Be very less verbose. Do not list stuff. 
+                    If Jay asks you to perform operations relating to software or web search (such as sports), answer positively that you are initiating the commands.
+                    Do not answer "I can't", just say you will initiate commands to do so.
+                """,
                 "input_audio_transcription": {
                     "model":"whisper-1",
                     "language":"en"

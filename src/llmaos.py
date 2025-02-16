@@ -9,18 +9,22 @@ import requests
 from random import choice
 from string import ascii_uppercase
 import logging
+from mistralai import Mistral
 
 class LLMAOS():
 
-    def __init__(self, client, network):
+    def __init__(self, client, network, neva_flag=True, pixtral_flag=True):
         self.KEYWORDS = ["<enter>"]
         self.GPT_MODEL = "gpt-4o-mini"
+        self.PIXTRAL_MODEL = "pixtral-12b-2409"
         self.a0 = None # accumulator, stores return value
         self.t0 = None # task instruction
         self.screenshot_name_history = []
         self.screenshot_name_length = 20
         self.client = client
         self.network = network
+        self.neva_flag = neva_flag
+        self.pixtral_flag = pixtral_flag
         pass
 
     async def execute(self, instructions: list[str], transcript: str) -> None:
@@ -166,6 +170,36 @@ class LLMAOS():
 
     ### CODE GEN PORTION
 
+    async def mistralai_pixtral(self, transcript) -> str:
+        filename = self.screenshot_name_history[-1]
+        image_path = f"{filename}.png"
+        base64_image = self.encode_image(image_path)
+        client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"The user recently asked {transcript}. Can you answer that using the image below?"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": f"data:image/jpeg;base64,{base64_image}" 
+                    }
+                ]
+            }
+        ]
+
+        chat_response = client.chat.complete(
+            model=self.PIXTRAL_MODEL,
+            messages=messages
+        )
+
+        answer = chat_response.choices[0].message.content
+        logging.getLogger(__name__).warning(f"answer from pixtral = {answer}")
+        return answer
+
     async def nvidia_neva(self, transcript) -> str:
         invoke_url = "https://ai.api.nvidia.com/v1/vlm/nvidia/neva-22b"
         stream = False
@@ -211,7 +245,7 @@ class LLMAOS():
         image_path = f"{self.screenshot_name_history[-1]}.png"
         base64_image = self.encode_image(image_path)
 
-        resp1, resp2 = await asyncio.gather(
+        args = [
             self.client.chat.completions.create(
                 model=self.GPT_MODEL,
                 messages=[
@@ -229,15 +263,18 @@ class LLMAOS():
                         ],
                     }
                 ],
-            ),
-            self.nvidia_neva(transcript)
-        )
+            )
+        ]
+        if self.neva_flag: args.append(self.nvidia_neva(transcript))
+        if self.pixtral_flag: args.append(self.mistralai_pixtral(transcript))
 
-        resp1 = resp1.choices[0].message.content
+        resp_all = await asyncio.gather(*args)
 
-        self.a0 = resp1 + resp2 # simple concatenation
+        resp_all = list(resp_all)
+        resp_all[0] = resp_all[0].choices[0].message.content # 0th argument is always gpt
+        self.a0 = " ".join(resp_all) # simple concatenation
+
         logging.getLogger(__name__).warning(f"final answer = {self.a0}")
-        # TODO add in Pixstral as another layer of analysis
         logging.getLogger(__name__).warning(f"analysis returns = {self.a0}")
 
         connection = await self.network._get_connection()
@@ -255,7 +292,7 @@ class LLMAOS():
         await asyncio.sleep(0)
         return
 
-    async def analysis(self, transcript: str) -> None:
+    async def analysis_simple(self, transcript: str) -> None:
         image_path = f"{self.screenshot_name_history[-1]}.png"
         base64_image = self.encode_image(image_path)
         response = await self.client.chat.completions.create(
@@ -277,7 +314,6 @@ class LLMAOS():
             ],
         )
         self.a0 = response.choices[0].message.content
-        # TODO add in Pixstral as another layer of analysis
         logging.getLogger(__name__).warning(f"analysis returns = {self.a0}")
         return
 
@@ -300,5 +336,12 @@ class LLMAOS():
     ### HELPER
 
     def encode_image(self, image_path):
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
+        try:
+            with open(image_path, "rb") as image_file:
+                return base64.b64encode(image_file.read()).decode('utf-8')
+        except FileNotFoundError:
+            print(f"Error: The file {image_path} was not found.")
+            return None
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
