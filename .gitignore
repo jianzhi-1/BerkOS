@@ -19,6 +19,10 @@
 *.tgz
 *.bla
 
+# images, presentation, analysis
+*.pptx
+*.webp
+
 # log
 *.log
 
