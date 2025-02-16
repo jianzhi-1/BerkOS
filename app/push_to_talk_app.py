@@ -32,6 +32,11 @@ import logging
 import time
 import pyautogui
 import subprocess
+import queue
+import io
+
+from pydub import AudioSegment
+from pydub.playback import play
 
 from textual import events
 from audio_util import CHANNELS, SAMPLE_RATE, AudioPlayerAsync
@@ -155,6 +160,7 @@ class RealtimeApp(App[None]):
         self.screenshot_name_history = []
         self.screenshot_name_length = 20
         self.KEYWORDS = ["<enter>"]
+        self.processor_queue = queue.Queue()
 
     @override
     def compose(self) -> ComposeResult:
@@ -167,6 +173,7 @@ class RealtimeApp(App[None]):
     async def on_mount(self) -> None:
         self.run_worker(self.handle_realtime_connection())
         self.run_worker(self.send_mic_audio())
+        self.run_worker(self.processor())
 
     async def assemble_and_run(self, transcript):
         instructions = await self.codegen(transcript)
@@ -189,8 +196,9 @@ class RealtimeApp(App[None]):
                         4. LEFT_DOUBLE_CLICK x y (x, y are integers)
                         5. RIGHT_CLICK
                         6. OPEN_TERMINAL
-                        7. RET
-                        8. NO-OP
+                        7. ANALYSIS
+                        8. RET
+                        9. NO-OP
                     """
                 }, {
                     "role": "developer", 
@@ -269,10 +277,10 @@ class RealtimeApp(App[None]):
             elif "ANALYSIS" in inst:
                 await self.analysis(transcript)
             elif "RET" in inst:
-                await self.ret(self.a0)
+                await self.ret()
             elif "SCREENSHOT" in inst:
                 self.screenshot()
-                time.sleep(5)
+                time.sleep(3)
             elif "NO-OP" in inst:
                 pass
             else:
@@ -293,6 +301,7 @@ class RealtimeApp(App[None]):
         screenshot = pyautogui.screenshot()
         screenshot.save(f"{name}.png")
         self.screenshot_name_history.append(name)
+        logger.warn(f"Screenshot name = {name}")
 
     async def handle_realtime_connection(self) -> None:
         async with self.client.beta.realtime.connect(
@@ -344,7 +353,8 @@ class RealtimeApp(App[None]):
 
                 if event.type == "conversation.item.input_audio_transcription.completed":
                     logger.warning(f"!!! User transcript: {event.transcript}")
-                    await self.assemble_and_run(event.transcript)
+                    self.processor_queue.put(event.transcript)
+                    # await self.assemble_and_run(event.transcript)
                     continue
 
                 if event.type == "response.audio_transcript.delta":
@@ -365,6 +375,16 @@ class RealtimeApp(App[None]):
         await self.connected.wait()
         assert self.connection is not None
         return self.connection
+
+    async def processor(self) -> None:
+        while True:
+            if self.processor_queue.empty(): # no task
+                await asyncio.sleep(0)
+                continue
+            else:
+                transcript = self.processor_queue.get()
+                logger.warning(f"processing transcript {transcript}")
+                await self.assemble_and_run(transcript)
     
     async def send_mic_audio(self) -> None:
         import sounddevice as sd  # type: ignore
@@ -444,7 +464,7 @@ class RealtimeApp(App[None]):
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
 
-    async def analysis(self, transcript: str) -> str:
+    async def analysis(self, transcript: str) -> None:
         image_path = f"{self.screenshot_name_history[-1]}.png"
         base64_image = self.encode_image(image_path)
         response = await self.client.chat.completions.create(
@@ -467,24 +487,30 @@ class RealtimeApp(App[None]):
         )
         self.a0 = response.choices[0].message.content
         # TODO add in Pixstral as another layer of analysis
-        logger.warning(self.a0)
-        return self.a0
+        logging.getLogger(__name__).warning(f"analysis returns = {self.a0}")
+        return
 
-    async def ret(self, result: str) -> None:
+    async def ret(self) -> None:
         # TODO can also use whisper or tacotron or nvidia
-        logger.warning(f"in ret = {result}")
+        logging.getLogger(__name__).warning(f"in ret = {self.a0}")
 
         # TODO TTS - use audioPlayer somehow
         response = await self.client.audio.speech.create(
             model="tts-1",
             voice="sage",
-            input=result,
+            input=self.a0
         )
-        bytes_data = base64.b64decode(response.read())
-        if len(bytes_data) % 2 != 0:
-            bytes_data = bytes_data[:-1]
 
-        self.audio_player.add_data(bytes_data)
+        audio_data = io.BytesIO(response.read())
+        audio = AudioSegment.from_file(audio_data, format="mp3")
+        play(audio)
+
+        # bytes_data = base64.b64decode(response.read())
+        # if len(bytes_data) % 2 != 0:
+        #     bytes_data = bytes_data[:-1]
+
+        # self.audio_player.reset_frame_count()
+        # self.audio_player.add_data(bytes_data)
 
     def left_click(self, x=None, y=None) -> None:
         if not (x is None and y is None):
